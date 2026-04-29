@@ -20,15 +20,18 @@ from aiogram.utils.deep_linking import create_start_link
 from dotenv import load_dotenv
 
 # ---------- Загрузка конфигурации ----------
-load_dotenv()
+# Загружаем .env только локально (не на Railway)
+if not os.getenv("RAILWAY_ENVIRONMENT"):
+    load_dotenv()
+
 BOT_TOKEN: str = os.getenv("BOT_TOKEN")
-ADMIN_ID: int = int(os.getenv("ADMIN_ID"))          # Telegram ID администратора
-CHANNEL_ID: int = int(os.getenv("CHANNEL_ID"))      # ID приватного канала (например, -1001234567890)
+ADMIN_ID: int = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None          # Telegram ID администратора
+CHANNEL_ID: int = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else None      # ID приватного канала (например, -1001234567890)
 INVITE_LINK: Optional[str] = os.getenv("INVITE_LINK")  # Резервная ссылка, если бот не может создать приглашение
 DATABASE_URL: str = os.getenv("DATABASE_URL")  # URL для подключения к БД
 
-if not BOT_TOKEN or not ADMIN_ID or not CHANNEL_ID or not DATABASE_URL:
-    raise ValueError("BOT_TOKEN, ADMIN_ID, CHANNEL_ID и DATABASE_URL должны быть установлены в .env")
+if not BOT_TOKEN or ADMIN_ID is None or CHANNEL_ID is None or not DATABASE_URL:
+    raise EnvironmentError("BOT_TOKEN, ADMIN_ID, CHANNEL_ID и DATABASE_URL должны быть установлены в переменных окружения")
 
 # ---------- Логирование ----------
 logging.basicConfig(
