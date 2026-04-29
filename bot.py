@@ -389,22 +389,6 @@ async def main():
         logger.info("Бот остановлен")
 
 if __name__ == "__main__":
-    # Обработка сигналов для корректного завершения на хостингах
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    stop_event = asyncio.Event()
-
-    def signal_handler():
-        logger.info("Получен сигнал остановки")
-        stop_event.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, signal_handler)
-
-    try:
-        loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(main())
 # telegrambot
 # telegrambot
