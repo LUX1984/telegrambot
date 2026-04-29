@@ -32,16 +32,7 @@ DATABASE_URL: str = os.getenv("DATABASE_PUBLIC_URL")
 if not BOT_TOKEN or ADMIN_ID is None or CHANNEL_ID is None or not DATABASE_URL:
     raise EnvironmentError("Environment variables not set")
 
-# ---------- Логирование ----------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler("bot.log", encoding="utf-8"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+
 
 # ---------- Инициализация бота и диспетчера ----------
 bot = Bot(token=BOT_TOKEN)
