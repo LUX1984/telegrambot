@@ -24,14 +24,18 @@ This is a Telegram bot built with Python and aiogram that handles applications f
    pip install -r requirements.txt
    ```
 
-3. Create a `.env` file based on `.env.example` (copy it and fill in your values):
+3. Set up the database:
+   - For Railway: Add a PostgreSQL database in your Railway dashboard and copy the `DATABASE_URL` from the variables.
+   - For local development: Set up a PostgreSQL database and provide the connection URL.
+
+4. Create a `.env` file based on `.env.example` (copy it and fill in your values):
    - `BOT_TOKEN`: Get from @BotFather on Telegram
    - `ADMIN_ID`: Your Telegram user ID (as integer)
    - `CHANNEL_ID`: The ID of your private channel (negative number, e.g., -1001234567890)
    - `INVITE_LINK`: Optional static invite link if bot can't create one
-   - `DB_PATH`: Path to database file (default: applications.db)
+   - `DATABASE_URL`: PostgreSQL connection URL (e.g., postgresql://user:password@host:port/db)
 
-4. Run the bot:
+5. Run the bot:
    ```bash
    python bot.py
    ```
