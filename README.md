@@ -33,7 +33,7 @@ This is a Telegram bot built with Python and aiogram that handles applications f
    - `ADMIN_ID`: Your Telegram user ID (as integer)
    - `CHANNEL_ID`: The ID of your private channel (negative number, e.g., -1001234567890)
    - `INVITE_LINK`: Optional static invite link if bot can't create one
-   - `DATABASE_URL`: PostgreSQL connection URL (e.g., postgresql://user:password@host:port/db)
+   - `DATABASE_PUBLIC_URL`: PostgreSQL connection URL (e.g., postgresql://user:password@host:port/db)
 
 5. Run the bot:
    ```bash

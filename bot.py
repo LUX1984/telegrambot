@@ -28,7 +28,7 @@ BOT_TOKEN: str = os.getenv("BOT_TOKEN")
 ADMIN_ID: int = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None          # Telegram ID администратора
 CHANNEL_ID: int = int(os.getenv("CHANNEL_ID")) if os.getenv("CHANNEL_ID") else None      # ID приватного канала (например, -1001234567890)
 INVITE_LINK: Optional[str] = os.getenv("INVITE_LINK")  # Резервная ссылка, если бот не может создать приглашение
-DATABASE_URL: str = os.getenv("DATABASE_URL")  # URL для подключения к БД
+DATABASE_URL: str = os.getenv("DATABASE_PUBLIC_URL")  # URL для подключения к БД
 
 if not BOT_TOKEN or ADMIN_ID is None or CHANNEL_ID is None or not DATABASE_URL:
     raise EnvironmentError("BOT_TOKEN, ADMIN_ID, CHANNEL_ID и DATABASE_URL должны быть установлены в переменных окружения")
