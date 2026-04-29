@@ -135,7 +135,6 @@ def is_admin(message_or_callback) -> bool:
 @dp.message(Command("admin"), F.func(is_admin))
 async def cmd_admin(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 List Applications", callback_data="list")],
         [InlineKeyboardButton(text="📊 Statistics", callback_data="stats")]
     ])
     await message.answer("🔧 Admin Panel:", reply_markup=keyboard)
@@ -151,94 +150,38 @@ async def cmd_start(message: types.Message):
     username = user.username
 
     async with (await get_db()).acquire() as db:
-        try:
-            await db.execute(
-                "INSERT INTO applications (user_id, name, username) VALUES ($1, $2, $3)",
-                user_id, name, username
-            )
-        except asyncpg.UniqueViolationError:
-            await message.answer("👋 Вы уже подавали заявку. Ожидайте решения администратора.")
-            return
+        # Auto-approve application, allow resubmit
+        await db.execute(
+            """
+            INSERT INTO applications (user_id, name, username, status)
+            VALUES ($1, $2, $3, 'approved')
+            ON CONFLICT (user_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                username = EXCLUDED.username,
+                status = 'approved',
+                created_at = CURRENT_TIMESTAMP
+            """,
+            user_id, name, username
+        )
 
-    await message.answer("👋 Добро пожаловать! Ваша заявка на вступление в приватный канал принята автоматически. Ожидайте одобрения администратора.")
+        # Create invite
+        invite_link = await create_invite_for_user(user_id)
+        if invite_link:
+            await db.execute("UPDATE applications SET invite_link = $1 WHERE user_id = $2", invite_link, user_id)
+        else:
+            invite_link = INVITE_LINK
+            if invite_link:
+                await db.execute("UPDATE applications SET invite_link = $1 WHERE user_id = $2", invite_link, user_id)
+
+    if invite_link:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Присоединиться", url=invite_link)]
+        ])
+        await message.answer("👋 Добро пожаловать! Вот кнопка для вступления в канал:", reply_markup=keyboard)
+    else:
+        await message.answer("❌ Не удалось создать пригласительную ссылку. Свяжитесь с администратором.")
 
 # ---------- Административные команды ----------
-
-@dp.callback_query(F.data == "list")
-async def callback_list(callback: CallbackQuery):
-    if not is_admin(callback):
-        await callback.answer("Access denied.")
-        return
-
-    async with (await get_db()).acquire() as db:
-        rows = await db.fetch("SELECT id, user_id, name, username FROM applications WHERE status = $1", 'pending')
-
-    if not rows:
-        await callback.answer("📋 Нет заявок в ожидании.")
-        return
-
-    text = "<b>📋 Ожидающие заявки:</b>\n\n"
-    keyboard = []
-    for row in rows:
-        id_, uid, name, username = row['id'], row['user_id'], row['name'], row['username']
-        username_str = f"@{username}" if username else "не указан"
-        text += f"ID: {id_}, User: {uid}, Name: {name}, Username: {username_str}\n\n"
-        keyboard.append([
-            InlineKeyboardButton(text=f"✅ Approve {id_}", callback_data=f"approve_{uid}"),
-            InlineKeyboardButton(text=f"❌ Reject {id_}", callback_data=f"reject_{uid}")
-        ])
-
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="HTML")
-
-@dp.callback_query(F.data.startswith("approve_"))
-async def callback_approve(callback: CallbackQuery):
-    if not is_admin(callback):
-        await callback.answer("Access denied.")
-        return
-
-    user_id = int(callback.data.split("_")[1])
-
-    async with (await get_db()).acquire() as db:
-        row = await db.fetchrow("SELECT invite_link, status FROM applications WHERE user_id = $1", user_id)
-        if not row or row['status'] != 'pending':
-            await callback.answer("❌ Заявка не найдена или уже обработана.")
-            return
-
-        invite_link = row['invite_link']
-        if not invite_link:
-            invite_link = await create_invite_for_user(user_id)
-            if not invite_link:
-                await callback.answer("❌ Не удалось создать пригласительную ссылку.")
-                return
-            await db.execute("UPDATE applications SET invite_link = $1 WHERE user_id = $2", invite_link, user_id)
-
-        await db.execute("UPDATE applications SET status = $1 WHERE user_id = $2", 'approved', user_id)
-
-    await send_invite_to_user(user_id, invite_link)
-    await callback.answer(f"✅ Заявка пользователя {user_id} одобрена. Ссылка отправлена.")
-
-@dp.callback_query(F.data.startswith("reject_"))
-async def callback_reject(callback: CallbackQuery):
-    if not is_admin(callback):
-        await callback.answer("Access denied.")
-        return
-
-    user_id = int(callback.data.split("_")[1])
-
-    async with (await get_db()).acquire() as db:
-        row = await db.fetchrow("SELECT status FROM applications WHERE user_id = $1", user_id)
-        if not row or row['status'] != 'pending':
-            await callback.answer("❌ Заявка не найдена или уже обработана.")
-            return
-
-        await db.execute("UPDATE applications SET status = $1 WHERE user_id = $2", 'rejected', user_id)
-
-    try:
-        await bot.send_message(user_id, "❌ Ваша заявка была отклонена администратором.")
-    except Exception as e:
-        logger.warning(f"Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
-
-    await callback.answer(f"❌ Заявка пользователя {user_id} отклонена. Пользователь уведомлён.")
 
 @dp.callback_query(F.data == "stats")
 async def callback_stats(callback: CallbackQuery):
@@ -253,13 +196,13 @@ async def callback_stats(callback: CallbackQuery):
     async with (await get_db()).acquire() as db:
         count_today = await db.fetchval("SELECT COUNT(*) FROM applications WHERE created_at >= $1", today_start.isoformat())
         count_week = await db.fetchval("SELECT COUNT(*) FROM applications WHERE created_at >= $1", week_start.isoformat())
-        count_pending = await db.fetchval("SELECT COUNT(*) FROM applications WHERE status = $1", 'pending')
+        count_total = await db.fetchval("SELECT COUNT(*) FROM applications")
 
     text = (
         f"📊 Статистика:\n"
         f"• За сегодня: {count_today}\n"
         f"• За неделю: {count_week}\n"
-        f"• В ожидании: {count_pending}"
+        f"• Всего заявок: {count_total}"
     )
     await callback.message.edit_text(text)
 
