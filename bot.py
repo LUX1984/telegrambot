@@ -10,7 +10,7 @@ import signal
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
-import aiosqlite
+import asyncpg
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -25,10 +25,10 @@ BOT_TOKEN: str = os.getenv("BOT_TOKEN")
 ADMIN_ID: int = int(os.getenv("ADMIN_ID"))          # Telegram ID администратора
 CHANNEL_ID: int = int(os.getenv("CHANNEL_ID"))      # ID приватного канала (например, -1001234567890)
 INVITE_LINK: Optional[str] = os.getenv("INVITE_LINK")  # Резервная ссылка, если бот не может создать приглашение
-DB_PATH: str = os.getenv("DB_PATH", "applications.db")  # Путь к файлу БД
+DATABASE_URL: str = os.getenv("DATABASE_URL")  # URL для подключения к БД
 
-if not BOT_TOKEN or not ADMIN_ID or not CHANNEL_ID:
-    raise ValueError("BOT_TOKEN, ADMIN_ID и CHANNEL_ID должны быть установлены в .env")
+if not BOT_TOKEN or not ADMIN_ID or not CHANNEL_ID or not DATABASE_URL:
+    raise ValueError("BOT_TOKEN, ADMIN_ID, CHANNEL_ID и DATABASE_URL должны быть установлены в .env")
 
 # ---------- Логирование ----------
 logging.basicConfig(
@@ -46,17 +46,23 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 # ---------- Работа с БД ----------
-async def get_db() -> aiosqlite.Connection:
-    """Возвращает соединение с БД (один экземпляр на всё приложение)."""
-    return await aiosqlite.connect(DB_PATH, executor=None)
+pool = None
+
+async def get_db():
+    """Возвращает пул соединений с БД."""
+    global pool
+    if pool is None:
+        pool = await asyncpg.create_pool(DATABASE_URL)
+    return pool
 
 async def init_db():
     """Создание таблицы, если её нет."""
-    async with await get_db() as db:
-        await db.execute("""
+    pool = await get_db()
+    async with pool.acquire() as conn:
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS applications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER UNIQUE,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT UNIQUE,
                 name TEXT NOT NULL,
                 username TEXT,
                 reason TEXT,
@@ -65,7 +71,6 @@ async def init_db():
                 invite_link TEXT
             )
         """)
-        await db.commit()
 
 # ---------- Модель FSM ----------
 class ApplicationForm(StatesGroup):
@@ -128,9 +133,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
         return
 
     user_id = message.from_user.id
-    async with await get_db() as db:
-        cursor = await db.execute("SELECT id FROM applications WHERE user_id = ?", (user_id,))
-        existing = await cursor.fetchone()
+    async with (await get_db()).acquire() as db:
+        existing = await db.fetchrow("SELECT id FROM applications WHERE user_id = $1", user_id)
         if existing:
             await message.answer(
                 "Вы уже подавали заявку. Ожидайте решения администратора. "
@@ -210,14 +214,13 @@ async def process_reason(message: types.Message, state: FSMContext):
     username = data["username"]
 
     # Сохраняем заявку в БД
-    async with await get_db() as db:
+    async with (await get_db()).acquire() as db:
         try:
             await db.execute(
-                "INSERT INTO applications (user_id, name, username, reason) VALUES (?, ?, ?, ?)",
-                (user_id, name, username, reason)
+                "INSERT INTO applications (user_id, name, username, reason) VALUES ($1, $2, $3, $4)",
+                user_id, name, username, reason
             )
-            await db.commit()
-        except aiosqlite.IntegrityError:
+        except asyncpg.UniqueViolationError:
             await message.answer("Вы уже подавали заявку.")
             await state.clear()
             return
@@ -225,9 +228,8 @@ async def process_reason(message: types.Message, state: FSMContext):
     # Автоматически создаём пригласительную ссылку и сохраняем в БД
     invite_link = await create_invite_for_user(user_id)
     if invite_link:
-        async with await get_db() as db:
-            await db.execute("UPDATE applications SET invite_link = ? WHERE user_id = ?", (invite_link, user_id))
-            await db.commit()
+        async with (await get_db()).acquire() as db:
+            await db.execute("UPDATE applications SET invite_link = $1 WHERE user_id = $2", invite_link, user_id)
         await send_invite_to_user(user_id, invite_link)
     else:
         # если ссылка не создалась и статической нет
@@ -244,11 +246,8 @@ def is_admin(message: types.Message) -> bool:
 
 @dp.message(Command("list"), F.func(lambda _, msg: is_admin(msg)))
 async def cmd_list(message: types.Message):
-    async with await get_db() as db:
-        cursor = await db.execute(
-            "SELECT id, user_id, name, username, reason, status, created_at FROM applications WHERE status = 'pending'"
-        )
-        rows = await cursor.fetchall()
+    async with (await get_db()).acquire() as db:
+        rows = await db.fetch("SELECT id, user_id, name, username, reason, status, created_at FROM applications WHERE status = $1", 'pending')
         if not rows:
             await message.answer("Нет заявок в ожидании.")
             return
@@ -282,14 +281,13 @@ async def cmd_approve(message: types.Message, command):
         await message.answer("Неверный user_id")
         return
 
-    async with await get_db() as db:
-        cursor = await db.execute("SELECT invite_link, status FROM applications WHERE user_id = ?", (user_id,))
-        row = await cursor.fetchone()
+    async with (await get_db()).acquire() as db:
+        row = await db.fetchrow("SELECT invite_link, status FROM applications WHERE user_id = $1", user_id)
         if not row:
             await message.answer("Заявка не найдена.")
             return
 
-        invite_link, status = row
+        invite_link, status = row['invite_link'], row['status']
         if status != "pending":
             await message.answer(f"Заявка уже обработана (статус: {status}).")
             return
@@ -300,10 +298,9 @@ async def cmd_approve(message: types.Message, command):
             if not invite_link:
                 await message.answer("❌ Не удалось создать пригласительную ссылку.")
                 return
-            await db.execute("UPDATE applications SET invite_link = ? WHERE user_id = ?", (invite_link, user_id))
+            await db.execute("UPDATE applications SET invite_link = $1 WHERE user_id = $2", invite_link, user_id)
 
-        await db.execute("UPDATE applications SET status = 'approved' WHERE user_id = ?", (user_id,))
-        await db.commit()
+        await db.execute("UPDATE applications SET status = $1 WHERE user_id = $2", 'approved', user_id)
 
     await send_invite_to_user(user_id, invite_link)
     await message.answer(f"✅ Заявка пользователя {user_id} одобрена. Ссылка отправлена.")
@@ -320,19 +317,17 @@ async def cmd_reject(message: types.Message, command):
         await message.answer("Неверный user_id")
         return
 
-    async with await get_db() as db:
-        cursor = await db.execute("SELECT status FROM applications WHERE user_id = ?", (user_id,))
-        row = await cursor.fetchone()
+    async with (await get_db()).acquire() as db:
+        row = await db.fetchrow("SELECT status FROM applications WHERE user_id = $1", user_id)
         if not row:
             await message.answer("Заявка не найдена.")
             return
-        status = row[0]
+        status = row['status']
         if status != "pending":
             await message.answer(f"Заявка уже обработана (статус: {status}).")
             return
 
-        await db.execute("UPDATE applications SET status = 'rejected' WHERE user_id = ?", (user_id,))
-        await db.commit()
+        await db.execute("UPDATE applications SET status = $1 WHERE user_id = $2", 'rejected', user_id)
 
     try:
         await bot.send_message(user_id, "❌ Ваша заявка была отклонена администратором.")
@@ -347,19 +342,10 @@ async def cmd_stats(message: types.Message):
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
-    async with await get_db() as db:
-        row_today = await db.execute_fetchall(
-            "SELECT COUNT(*) FROM applications WHERE created_at >= ?", (today_start.isoformat(),)
-        )
-        row_week = await db.execute_fetchall(
-            "SELECT COUNT(*) FROM applications WHERE created_at >= ?", (week_start.isoformat(),)
-        )
-        row_pending = await db.execute_fetchall(
-            "SELECT COUNT(*) FROM applications WHERE status = 'pending'", ()
-        )
-        count_today = row_today[0][0] if row_today else 0
-        count_week = row_week[0][0] if row_week else 0
-        count_pending = row_pending[0][0] if row_pending else 0
+    async with (await get_db()).acquire() as db:
+        count_today = await db.fetchval("SELECT COUNT(*) FROM applications WHERE created_at >= $1", today_start.isoformat())
+        count_week = await db.fetchval("SELECT COUNT(*) FROM applications WHERE created_at >= $1", week_start.isoformat())
+        count_pending = await db.fetchval("SELECT COUNT(*) FROM applications WHERE status = $1", 'pending')
 
     await message.answer(
         f"📊 Статистика:\n"

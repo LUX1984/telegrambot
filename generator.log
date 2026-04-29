@@ -1,0 +1,11 @@
+[2026-04-17 13:35:17] [INFO] Starting packet generation to 8.8.8.8 (Type: SYN, Packets: 999, Delay: 1ms)
+[2026-04-17 13:35:17] [ERROR] Error during packet sending: Failed to send SYN packet: Message too long
+[2026-04-17 13:35:17] [ERROR] Failed to send SYN packet: Message too long
+[2026-04-17 13:35:46] [INFO] Starting packet generation to 8.8.8.8 (Type: ICMP, Packets: 3, Delay: 5ms)
+[2026-04-17 13:35:46] [ERROR] Error during packet sending: Failed to send ICMP packet: Message too long
+[2026-04-17 13:35:46] [ERROR] Failed to send ICMP packet: Message too long
+[2026-04-17 13:39:56] [INFO] Starting packet generation to 10.10.10.10 (Type: SYN, Packets: 1, Delay: 3ms)
+[2026-04-17 13:39:56] [INFO] Sent 0 packets before interruption.
+[2026-04-17 14:49:52] [INFO] Запуск генерации пакетов на 10.10.10.10 (Тип: SYN, Пакетов: 1, Задержка: 2мс)
+[2026-04-17 14:49:52] [ERROR] Ошибка во время отправки пакетов: Не удалось отправить SYN-пакет: Message too long
+[2026-04-17 14:49:52] [ERROR] Не удалось отправить SYN-пакет: Message too long
