@@ -48,7 +48,7 @@ dp = Dispatcher(storage=MemoryStorage())
 # ---------- Работа с БД ----------
 async def get_db() -> aiosqlite.Connection:
     """Возвращает соединение с БД (один экземпляр на всё приложение)."""
-    return await aiosqlite.connect(DB_PATH)
+    return await aiosqlite.connect(DB_PATH, executor=None)
 
 async def init_db():
     """Создание таблицы, если её нет."""
