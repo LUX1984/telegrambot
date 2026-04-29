@@ -181,18 +181,16 @@ async def callback_stats(callback: CallbackQuery):
         await callback.answer("Access denied.")
         return
 
-    now = datetime.now()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = today_start - timedelta(days=today_start.weekday())
+    last_24h = datetime.now() - timedelta(hours=24)
 
     async with (await get_db()).acquire() as db:
-        count_today = await db.fetchval("SELECT COUNT(*) FROM applications WHERE created_at >= $1", today_start.isoformat())
-        count_week = await db.fetchval("SELECT COUNT(*) FROM applications WHERE created_at >= $1", week_start.isoformat())
+        count_total = await db.fetchval("SELECT COUNT(*) FROM applications WHERE status = 'approved'")
+        count_24h = await db.fetchval("SELECT COUNT(*) FROM applications WHERE status = 'approved' AND created_at >= $1", last_24h.isoformat())
 
     text = (
         f"📊 Statistics:\n"
-        f"• Joined today: {count_today}\n"
-        f"• Joined this week: {count_week}\n"
+        f"• Total subscribers via bot: {count_total}\n"
+        f"• Subscribers in last 24 hours: {count_24h}\n"
         f"• Bot status: Running"
     )
     await callback.message.edit_text(text)
