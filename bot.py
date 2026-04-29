@@ -13,8 +13,7 @@ from typing import Optional, Dict
 import asyncpg
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.deep_linking import create_start_link
 from dotenv import load_dotenv
@@ -75,11 +74,7 @@ async def init_db():
             )
         """)
 
-# ---------- Модель FSM ----------
-class ApplicationForm(StatesGroup):
-    name = State()
-    username = State()
-    reason = State()
+
 
 # ---------- Защита от спама ----------
 # Простейшая реализация: 5 секунд между любыми сообщениями от одного пользователя
@@ -130,102 +125,37 @@ async def send_invite_to_user(user_id: int, invite_link: str):
 
 # ---------- Обработчики команд ----------
 
+@dp.message(Command("admin"), F.func(is_admin))
+async def cmd_admin(message: types.Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 List Applications", callback_data="list")],
+        [InlineKeyboardButton(text="📊 Statistics", callback_data="stats")]
+    ])
+    await message.answer("🔧 Admin Panel:", reply_markup=keyboard)
+
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
+async def cmd_start(message: types.Message):
     if not await throttle_check(message):
         return
 
     user_id = message.from_user.id
-    async with (await get_db()).acquire() as db:
-        existing = await db.fetchrow("SELECT id FROM applications WHERE user_id = $1", user_id)
-        if existing:
-            await message.answer(
-                "Вы уже подавали заявку. Ожидайте решения администратора. "
-                "Если ссылка была утеряна, свяжитесь с администратором."
-            )
-            return
+    user = message.from_user
+    name = user.first_name or "Unknown"
+    username = user.username
 
-    # Предзаполняем username из Telegram, если есть
-    tg_username = message.from_user.username
-    await state.update_data(tg_username=tg_username)
-
-    await message.answer(
-        "👋 Добро пожаловать! Для вступления в приватный канал заполните короткую заявку.\n\n"
-        "Введите ваше имя (настоящее или публичное):"
-    )
-    await state.set_state(ApplicationForm.name)
-
-@dp.message(ApplicationForm.name)
-async def process_name(message: types.Message, state: FSMContext):
-    if not await throttle_check(message):
-        return
-
-    name = message.text.strip()
-    if len(name) < 2 or len(name) > 100:
-        await message.answer("❌ Имя должно быть от 2 до 100 символов. Попробуйте ещё раз.")
-        return
-
-    await state.update_data(name=name)
-
-    # Предлагаем username: если есть в Telegram, просим подтвердить, иначе ввести
-    data = await state.get_data()
-    tg_username = data.get("tg_username")
-    if tg_username:
-        await message.answer(
-            f"Ваш Telegram username: @{tg_username}\n"
-            "Если хотите использовать другой, введите его сейчас, или просто отправьте точку (.), чтобы оставить этот."
-        )
-    else:
-        await message.answer("Введите ваш Telegram username (например, @durov) или отправьте точку (.), если его нет:")
-    await state.set_state(ApplicationForm.username)
-
-@dp.message(ApplicationForm.username)
-async def process_username(message: types.Message, state: FSMContext):
-    if not await throttle_check(message):
-        return
-
-    user_input = message.text.strip()
-    data = await state.get_data()
-    tg_username = data.get("tg_username")
-
-    if user_input == ".":
-        # оставляем текущий или пустой
-        username = tg_username if tg_username else ""
-    else:
-        # убираем возможный @ и проверяем формат
-        username = user_input.lstrip("@")
-        if not (3 <= len(username) <= 32) or not username.replace("_", "").isalnum():
-            await message.answer("❌ Некорректный username. Введите ещё раз или точку, чтобы пропустить.")
-            return
-
-    await state.update_data(username=username)
-    await message.answer("Почему вы хотите вступить? (кратко, можно пропустить, отправив точку)»")
-    await state.set_state(ApplicationForm.reason)
-
-@dp.message(ApplicationForm.reason)
-async def process_reason(message: types.Message, state: FSMContext):
-    if not await throttle_check(message):
-        return
-
-    reason = message.text.strip()
-    if reason == ".":
-        reason = None
-
-    data = await state.get_data()
-    user_id = message.from_user.id
-    name = data["name"]
-    username = data["username"]
-
-    # Сохраняем заявку в БД
     async with (await get_db()).acquire() as db:
         try:
             await db.execute(
-                "INSERT INTO applications (user_id, name, username, reason) VALUES ($1, $2, $3, $4)",
-                user_id, name, username, reason
+                "INSERT INTO applications (user_id, name, username) VALUES ($1, $2, $3)",
+                user_id, name, username
             )
         except asyncpg.UniqueViolationError:
-            await message.answer("Вы уже подавали заявку.")
-            await state.clear()
+            await message.answer("👋 Вы уже подавали заявку. Ожидайте решения администратора.")
+            return
+
+    await message.answer("👋 Добро пожаловать! Ваша заявка на вступление в приватный канал принята автоматически. Ожидайте одобрения администратора.")
+
+
             return
 
     # Автоматически создаём пригласительную ссылку и сохраняем в БД
@@ -244,90 +174,76 @@ async def process_reason(message: types.Message, state: FSMContext):
 
 # ---------- Административные команды ----------
 
-def is_admin(message: types.Message) -> bool:
-    return message.from_user.id == ADMIN_ID
+def is_admin(message_or_callback) -> bool:
+    if hasattr(message_or_callback, 'from_user'):
+        return message_or_callback.from_user.id == ADMIN_ID
+    return False
 
-@dp.message(Command("list"), F.func(lambda _, msg: is_admin(msg)))
-async def cmd_list(message: types.Message):
+@dp.callback_query(F.data == "list")
+async def callback_list(callback: CallbackQuery):
+    if not is_admin(callback):
+        await callback.answer("Access denied.")
+        return
+
     async with (await get_db()).acquire() as db:
-        rows = await db.fetch("SELECT id, user_id, name, username, reason, status, created_at FROM applications WHERE status = $1", 'pending')
-        if not rows:
-            await message.answer("Нет заявок в ожидании.")
-            return
+        rows = await db.fetch("SELECT id, user_id, name, username FROM applications WHERE status = $1", 'pending')
 
-        text = "<b>Ожидающие заявки:</b>\n\n"
-        for row in rows:
-            id_, uid, name, username, reason, status, created = row
-            username_str = f"@{username}" if username else "не указан"
-            reason_str = reason or "не указана"
-            text += (
-                f"ID заявки: {id_}\n"
-                f"User ID: {uid}\n"
-                f"Имя: {name}\n"
-                f"Username: {username_str}\n"
-                f"Причина: {reason_str}\n"
-                f"Статус: {status}\n"
-                f"Дата: {created}\n"
-                f"──────────────────\n"
-            )
-        await message.answer(text, parse_mode="HTML")
+    if not rows:
+        await callback.answer("📋 Нет заявок в ожидании.")
+        return
 
-@dp.message(Command("approve"), F.func(lambda _, msg: is_admin(msg)))
-async def cmd_approve(message: types.Message, command):
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("Использование: /approve <user_id>")
+    text = "<b>📋 Ожидающие заявки:</b>\n\n"
+    keyboard = []
+    for row in rows:
+        id_, uid, name, username = row['id'], row['user_id'], row['name'], row['username']
+        username_str = f"@{username}" if username else "не указан"
+        text += f"ID: {id_}, User: {uid}, Name: {name}, Username: {username_str}\n\n"
+        keyboard.append([
+            InlineKeyboardButton(text=f"✅ Approve {id_}", callback_data=f"approve_{uid}"),
+            InlineKeyboardButton(text=f"❌ Reject {id_}", callback_data=f"reject_{uid}")
+        ])
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("approve_"))
+async def callback_approve(callback: CallbackQuery):
+    if not is_admin(callback):
+        await callback.answer("Access denied.")
         return
-    try:
-        user_id = int(args[1])
-    except ValueError:
-        await message.answer("Неверный user_id")
-        return
+
+    user_id = int(callback.data.split("_")[1])
 
     async with (await get_db()).acquire() as db:
         row = await db.fetchrow("SELECT invite_link, status FROM applications WHERE user_id = $1", user_id)
-        if not row:
-            await message.answer("Заявка не найдена.")
+        if not row or row['status'] != 'pending':
+            await callback.answer("❌ Заявка не найдена или уже обработана.")
             return
 
-        invite_link, status = row['invite_link'], row['status']
-        if status != "pending":
-            await message.answer(f"Заявка уже обработана (статус: {status}).")
-            return
-
-        # Если ссылка ещё не создана, создаём
+        invite_link = row['invite_link']
         if not invite_link:
             invite_link = await create_invite_for_user(user_id)
             if not invite_link:
-                await message.answer("❌ Не удалось создать пригласительную ссылку.")
+                await callback.answer("❌ Не удалось создать пригласительную ссылку.")
                 return
             await db.execute("UPDATE applications SET invite_link = $1 WHERE user_id = $2", invite_link, user_id)
 
         await db.execute("UPDATE applications SET status = $1 WHERE user_id = $2", 'approved', user_id)
 
     await send_invite_to_user(user_id, invite_link)
-    await message.answer(f"✅ Заявка пользователя {user_id} одобрена. Ссылка отправлена.")
+    await callback.answer(f"✅ Заявка пользователя {user_id} одобрена. Ссылка отправлена.")
 
-@dp.message(Command("reject"), F.func(lambda _, msg: is_admin(msg)))
-async def cmd_reject(message: types.Message, command):
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("Использование: /reject <user_id>")
+@dp.callback_query(F.data.startswith("reject_"))
+async def callback_reject(callback: CallbackQuery):
+    if not is_admin(callback):
+        await callback.answer("Access denied.")
         return
-    try:
-        user_id = int(args[1])
-    except ValueError:
-        await message.answer("Неверный user_id")
-        return
+
+    user_id = int(callback.data.split("_")[1])
 
     async with (await get_db()).acquire() as db:
         row = await db.fetchrow("SELECT status FROM applications WHERE user_id = $1", user_id)
-        if not row:
-            await message.answer("Заявка не найдена.")
-            return
-        status = row['status']
-        if status != "pending":
-            await message.answer(f"Заявка уже обработана (статус: {status}).")
+        if not row or row['status'] != 'pending':
+            await callback.answer("❌ Заявка не найдена или уже обработана.")
             return
 
         await db.execute("UPDATE applications SET status = $1 WHERE user_id = $2", 'rejected', user_id)
@@ -337,10 +253,14 @@ async def cmd_reject(message: types.Message, command):
     except Exception as e:
         logger.warning(f"Не удалось отправить уведомление об отказе пользователю {user_id}: {e}")
 
-    await message.answer(f"❌ Заявка пользователя {user_id} отклонена. Пользователь уведомлён.")
+    await callback.answer(f"❌ Заявка пользователя {user_id} отклонена. Пользователь уведомлён.")
 
-@dp.message(Command("stats"), F.func(lambda _, msg: is_admin(msg)))
-async def cmd_stats(message: types.Message):
+@dp.callback_query(F.data == "stats")
+async def callback_stats(callback: CallbackQuery):
+    if not is_admin(callback):
+        await callback.answer("Access denied.")
+        return
+
     now = datetime.now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
@@ -350,12 +270,13 @@ async def cmd_stats(message: types.Message):
         count_week = await db.fetchval("SELECT COUNT(*) FROM applications WHERE created_at >= $1", week_start.isoformat())
         count_pending = await db.fetchval("SELECT COUNT(*) FROM applications WHERE status = $1", 'pending')
 
-    await message.answer(
+    text = (
         f"📊 Статистика:\n"
         f"• За сегодня: {count_today}\n"
         f"• За неделю: {count_week}\n"
         f"• В ожидании: {count_pending}"
     )
+    await callback.message.edit_text(text)
 
 # ---------- Обработка исключений ----------
 @dp.errors()
