@@ -155,23 +155,6 @@ async def cmd_start(message: types.Message):
 
     await message.answer("👋 Добро пожаловать! Ваша заявка на вступление в приватный канал принята автоматически. Ожидайте одобрения администратора.")
 
-
-            return
-
-    # Автоматически создаём пригласительную ссылку и сохраняем в БД
-    invite_link = await create_invite_for_user(user_id)
-    if invite_link:
-        async with (await get_db()).acquire() as db:
-            await db.execute("UPDATE applications SET invite_link = $1 WHERE user_id = $2", invite_link, user_id)
-        await send_invite_to_user(user_id, invite_link)
-    else:
-        # если ссылка не создалась и статической нет
-        logger.error(f"Не удалось получить пригласительную ссылку для user_id={user_id}")
-        await message.answer("❌ Произошла ошибка при создании приглашения. Администратор свяжется с вами вручную.")
-
-    await message.answer("✅ Заявка принята! Приглашение отправлено вам в личные сообщения.")
-    await state.clear()
-
 # ---------- Административные команды ----------
 
 def is_admin(message_or_callback) -> bool:
