@@ -123,6 +123,13 @@ async def send_invite_to_user(user_id: int, invite_link: str):
     except Exception as e:
         logger.error(f"Ошибка отправки ссылки пользователю {user_id}: {e}")
 
+# ---------- Административные команды ----------
+
+def is_admin(message_or_callback) -> bool:
+    if hasattr(message_or_callback, 'from_user'):
+        return message_or_callback.from_user.id == ADMIN_ID
+    return False
+
 # ---------- Обработчики команд ----------
 
 @dp.message(Command("admin"), F.func(is_admin))
@@ -156,11 +163,6 @@ async def cmd_start(message: types.Message):
     await message.answer("👋 Добро пожаловать! Ваша заявка на вступление в приватный канал принята автоматически. Ожидайте одобрения администратора.")
 
 # ---------- Административные команды ----------
-
-def is_admin(message_or_callback) -> bool:
-    if hasattr(message_or_callback, 'from_user'):
-        return message_or_callback.from_user.id == ADMIN_ID
-    return False
 
 @dp.callback_query(F.data == "list")
 async def callback_list(callback: CallbackQuery):
